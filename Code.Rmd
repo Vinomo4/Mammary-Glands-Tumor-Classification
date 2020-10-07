@@ -1,0 +1,558 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r}
+source("./auxiliary.R")
+library(naivebayes)
+library(MASS)
+library(klaR)
+library(nnet)
+library(caret)
+library(randomForest)
+```
+
+*Càrrega de les dades*
+
+El primer pas de la pràctica consisteix en la lectura de la base de dades escollida,la seva visualització inicial així com la realització d'un pre-procés de les mateixes, amb l'objectiu d'eliminar i/o corregir possibles anomalies.
+
+```{r}
+dd = read.table("dades.data", sep = ",")
+head(dd)
+```
+
+La primera  columna no proporciona cap informació útil (tal i com indiquem a la guia). Posteriorment, realitzem un reanoment de les columnes, amb l'objectiu de facilitar el seu refereriment al llarg del codi,les transformema variables categòriques i procedim a la recerca de dades mancants.
+
+```{r}
+dd = dd[,-1]
+prueba = dd
+colnames(dd) = c("CT", "UCSi", "UCSh","MA","SECS","BN","BC","NN","Mit","Class")
+head(dd)
+```
+
+*Establiment de les variables com a categòriques.*
+
+```{r}
+for (i in 1:ncol(dd)){
+  dd[,i] = as.factor(dd[,i])
+}
+#Comprovació de que la conversió s'ha realitzat correctament.
+for (i in 1:ncol(dd)){
+  cat("La variable",colnames(dd)[i],"és factor:",is.factor(dd[,i]),"\n")
+}
+```
+
+*Comprovació de dades mancants*
+
+```{r}
+sum(is.na(dd))
+```
+
+Com podem comprovar, no disposem de cap dada mancant codificada com a $NA$. Mitjançant una observació dels valors màxims i mínims de les dades, podem comprovar que, tots els valors es troben ubicats dintre dels marges establerts en les enquestes (cada variable s'evalua en una escala del 1 al 10).
+
+```{r}
+apply(dd,2,max)
+apply(dd,2,min)
+```
+
+Per tant, si disposem de dades mancants aquestes es troben codificades de manera alternativa. Mitjançant una visualització de la documentació auxiliar adjunta al dataset, ens indica que disposem de dades que no van poder ser evaluades en algunes pacients, sent marcades com a "?".
+
+```{r}
+sum(dd=="?")
+```
+
+Com  podem observar, disposem de 16 missings. Els codifiquem seguïnt l'estandard d'R, (NA), i visualitzem on es troben ubicats, per tal de decidir sobre el seu tractament.
+
+```{r}
+dd[dd=="?"]=NA
+summary(dd)
+```
+
+Com podem veure, tots els NA es troben acumulats en la variable BN,pertenyent a 16 observacions diferents. Per tal de no eliminar 16 observacions vàlides a les que totes les falta el mateix valor, procedim a realitzar una imputació mitjançant la tècnica de *knn*.
+
+```{r}
+set.seed(4321)
+#Emagatzemem quines observacions disposen de dades mancants.
+aux = which(is.na(dd$BN))
+#Realitzem la imputació dels missings values.
+dd$BN = knn.imputation (dd$BN, "BN", dd)
+#Visualitzem els nous valors que han estat assignats.
+dd$BN[aux]
+```
+
+Com podem veure, s'han assignats nous valors a les dades mancants encara que en els levels continuem disposant de "?", l'eliminem per evitar possibles anomalies.
+
+```{r}
+cat("Levels BN abans de modificar:\n")
+table(dd$BN)
+dd$BN = factor(dd$BN, levels = c("1","2","3","4","5","6","7","8","9","10"))
+cat("\nLevels BN desprésde modificar:\n")
+table(dd$BN)
+
+#Afegim el valor 9 per a la variable Mit, que no es trobava codificada correctament.
+dd$Mit = factor(dd$Mit,  levels = c("1","2","3","4","5","6","7","8","9","10"))
+```
+
+Modifiquem el nivells de la variable *Class* a *benign* i *malignant* perquè siguin més interpretables:
+
+```{r}
+levels(dd$Class) = c("Benign", "Malignant")
+table(dd$Class)
+```
+
+Un cop havent realitzat el pre-processament de les dades, procedim a realitzar una exploració del dataset més en profunditat, mitjançant histogrames, relacions entre variables,etc.
+
+```{r}
+pairs(dd, col=ifelse(dd$Class == "Benign", "blue", "red"))
+```
+
+Degut a que són variables categòriques, no podrem realitzar ús de la funció *pairs* per observar relacions entre variables.
+
+PCA
+
+```{r}
+pca <-princomp(as.data.frame(sapply(dd[,-10], as.numeric)))
+
+scores <- as.data.frame(pca$scores)
+Class <- dd$Class
+
+var1 <- round(pca$sdev[1]/sum(pca$sdev)*100)
+var2 <- round(pca$sdev[2]/sum(pca$sdev)*100)
+
+p <- ggplot(scores, aes(x= scores[,1], y=scores[,2], colour= Class))+geom_point()+labs( x = paste("PC1 ",var1,"%"), y = paste("PC2 ",var2,"%"))
+print(p)
+```
+
+També apliquem clustering amb l'objectiu d'observar les diferències entre els dos grups de variables a predir és clara o es difusa:
+
+Incialment calculem la matriu de distàncies entre variables:
+```{r}
+Dist = dist(dd[,-10])
+```
+
+I procedim a realitzar diversos *clusterings*, variant el mètode de *linkatge*.
+
+```{r}
+hc.comp = hclust(Dist,method = "complete")
+plot(hc.comp,ylab="Distance",main="Complete linkage",xlab="",hang=-1,las=1,cex.main=1)
+clusterscomp <- cutree(hc.comp, 2)
+clusterscomp = as.factor(clusterscomp)
+levels(clusterscomp) = c("Benign", "Malignant")
+Table <-table(Truth = dd$Class,Cluster = clusterscomp)
+Table
+cat("Identificació total: ", sum(diag(Table))/sum(Table))
+```
+
+Provem amb linkatge ward:
+
+```{r}
+hc.ward = hclust(Dist,method = "ward.D2")
+plot(hc.ward,ylab="Distance", main="Ward linkage",xlab="",hang=-1,las=1,cex.main=1)
+clusterscomp2 <- cutree(hc.ward, 2)
+clusterscomp2 = as.factor(clusterscomp2)
+levels(clusterscomp2) = c("Benign", "Malignant")
+Table2 <-table(Truth = dd$Class,Cluster = clusterscomp2)
+Table2
+cat("Identificació total: ", sum(diag(Table2))/sum(Table2))
+```
+
+Com podem observar, en aquest dendograma ja s'aprecia més clarament els dos grups.
+
+Per últim, observem la frequencia de les respostes per a cadascuna de les variables:
+
+```{r}
+library(ggplot2)
+```
+
+
+```{r}
+par(mfrow=c(2,2))
+for(i in 1:9){
+  aux = ggplot(dd, aes(x = dd[,i])) + geom_bar(aes(fill = Class),position = "dodge") + labs(title = colnames(dd)[i], x = "Values", y = "Frequencies")
+  print(aux)
+}
+```
+
+Un cop tenint una breu idea de la distribució de les dades, procedim a la creació de models i el seu comput d'error.
+
+*Separació de les dades en training i testing*
+
+```{r}
+N <- nrow(dd)
+seleccio <- sample(N, round(N*0.67))
+Test <- dd[-seleccio,1:9]
+Learn <- dd[seleccio,1:9]
+
+X_Learn <- Learn
+C_learn<- dd$Class[seleccio]
+X_Test <- Test
+C_test <- dd$Class[-seleccio]
+```
+
+Els mètodes que aplicarem seràn:
+
+GLM'S
+
+Per a realitzar el glm, tractarem les dades com a valors númerics. 
+
+```{r}
+  calculate_validation_error <- function(X_Learning,C_Learning,X_validation,C_validation){
+  
+  md1 <- glm(C_Learning ~ ., family=binomial(link="logit"), data=X_Learning)
+  md2 <- glm(C_Learning ~ ., family=binomial(link="probit"), data=X_Learning)
+  md3 <- glm(C_Learning ~ ., family=binomial(link="cloglog"), data=X_Learning)
+  
+  Pred1 = predict(md1, newdata = X_validation, type = "response")
+  Pred2 = predict(md2, newdata = X_validation, type = "response")
+  Pred3 = predict(md3, newdata = X_validation, type = "response")
+  
+  #calculem els errors sumant el valors que han sigut classificat correctament (diagonal), dividint pel nombre total de valors.
+  error_validation_glm <- rep(0,3)
+  tab1 <- table(Truth=C_validation, Pred=round(Pred1))
+  error_validation_glm[1] <- 1 - sum(diag(tab1))/sum(tab1)
+  tab2 <- table(Truth=C_validation, Pred=round(Pred2))
+  error_validation_glm[2] <- 1 - sum(diag(tab2))/sum(tab2)
+  tab3 <- table(Truth=C_validation, Pred=round(Pred3))
+  error_validation_glm[3] <- 1 - sum(diag(tab3))/sum(tab3)
+  
+  return(error_validation_glm)
+}
+```
+
+NAIVE BAYES
+
+Utilitzarem la llibreria naivebayes. No ens hem de preocupar que un valor de la variable ens aparegui per primera vegada en el test, ja que la llibreria aplica de manera automàtica la correció Laplaciana en cas de que es produeixi aquest fenòmen.
+
+K-NN
+
+Amb l'objectiu d'implementar tots els mètodes de validació (10CV, 10x10CV i LOOCV) implementarem aquests mètodes de validació per a aquest mètode, encara que per a la comparació utilitzarem 10x10CV, ja que ha estat l'emparat en la resta de mètodes.
+
+(El 10x10CV es troba posteriorment a l'explicació dels models, mitjançant la funció *calculate_validation_error_v2*).
+
+En primer lloc realitzarem la vessant més senzilla d'aquest tipus d'anàlisis. Dividim les nostres dades aleatòriament en dues parts (learn i test) i intentem clasificar les dades de test a partir de les dades de learn. Per tal de calcular l'error d'una manera mès fiable repetirem aquest procediment m vegades per tal d'obtenir un promig dels errors i no quedar-nos amb una percepció equivocadada del model fruit d'una partició especialment favorable o desfavorable.
+
+```{r} 
+set.seed (4321)
+N <- nrow(X_Learn)
+m = 10
+error_validation_knn_1 = 0
+for (i in 1:m) {
+  seleccio <- sample(N, round(N*0.67))
+  
+  X_Learning = X_Learn[seleccio,]
+  C_Learning = C_learn[seleccio]
+  X_validation = X_Learn[-seleccio,]
+  C_validation = C_learn[-seleccio]
+  
+  knn.preds <- knn (X_Learning,X_validation, C_Learning, k = 10, use.all = TRUE) 
+  tab_knn <- table(Truth=C_validation, Preds=knn.preds)
+  error_validation_knn_1 <- error_validation_knn_1 + 1 - sum(diag(tab_knn))/sum(tab_knn)
+}
+
+error_validation_knn_1 = error_validation_knn_1/m
+cat("Error de validació: ", error_validation_knn_1)
+```
+
+Per millorar una mica aquest procediment i assegurar-nos que totes les observacions tenen la mateixa influència sobre el model i l'error (apareixen el mateix equitativament als conjunts learn i test) procedim a fer un k-nn pel mètode de leave-one-out. Si tinguèssim més dades segurament no caldria recòrrer a fer tantes particions i podríem apartar a la vegada més d'una dada per després predir el seu valor.
+
+k-nn LOOCV
+```{r}
+N = nrow(X_Learn)
+knn.preds_3 <-  rep(NA, N)
+for (m in 1:N) {
+  knn.preds_3[m] <- knn (X_Learn[-m,], X_Learn[m,], C_learn[-m], k = 10,use.all = TRUE)
+}
+tab_knn_3 <- table(Truth=C_learn, Preds=knn.preds_3)
+error_validation_knn_3 <- 1 - sum(diag(tab_knn_3))/sum(tab_knn_3)
+cat("Error de test: ", error_validation_knn_3)
+```
+
+Ara, utilitzant el mètode de k-nn LOOCV iterarem sobre k per veure quina és la més adient per aquest problema
+
+```{r}
+N <- nrow(X_Learn)
+neighbours <- 1:sqrt(N)
+
+error <- rep(0, length(neighbours))
+
+for (i in neighbours) {
+  knn.preds <-  rep(NA, N)
+  for (m in 1:N) {
+    knn.preds[m] <- knn (X_Learn[-m,], X_Learn[m,], C_learn[-m], k = i,use.all = TRUE)
+  }
+  tab <- table(Truth=C_learn, Preds=knn.preds)
+  error[i] <- 1 - sum(diag(tab))/sum(tab)
+}
+```
+
+```{r}
+X_Learn
+```
+
+
+```{r}
+par(mfrow=c(1,1))
+
+plot(neighbours,error, type="l", xaxt = "n")
+axis(1, neighbours)
+min(error)
+error[5]
+```
+
+LDA
+
+Primer volem veure si tenim dos grups diferenciats
+```{r}
+ X_Learn_1 = X_Learn
+for (i in 1:9){
+      X_Learn_1[,i] = as.numeric(X_Learn_1[,i])
+}
+lda <- lda(C_learn~., data=X_Learn_1)
+plot(lda)
+```
+
+QDA
+
+A més de probar el LDA, proposarem un model QDA.
+
+NEURONAL NETWORK
+
+```{r}
+X_Learn_scaled=as.data.frame(scale(X_Learn_1))
+Learn_scaled=cbind(X_Learn_scaled,C_learn)
+```
+
+Seleccionem el tamany
+
+```{r}
+(sizes <- 2*seq(1,10,by=1))
+```
+
+Especifiquem 10x10CV
+```{r}
+trc <- trainControl(method="repeatedcv", number=10, repeats=10)
+```
+
+Apliquem CV i entrenem el model final:
+
+```{r}
+model.10x10CV <- train (C_learn ~., data = Learn_scaled, 
+                        method='nnet', maxit = 500, trace = FALSE,
+                        tuneGrid = expand.grid(.size=sizes,.decay=0), trControl=trc)
+```
+
+Podem observar els resultats obtinguts
+
+```{r}
+model.10x10CV$results
+```
+
+Observem els resultats gràficament.
+
+```{r}
+ggplot(aes(x = model.10x10CV$results$size , y = model.10x10CV$results$Accuracy),data = model.10x10CV) +  
+  geom_point(shape = 21,fill = "#FF9999",size = 3) + geom_line() + labs(x = "Hidden Units")
+```
+
+
+I obtenim la millor configuració de model.
+
+```{r}
+model.10x10CV$bestTune
+```
+
+A continuació, en comptes de realitzar una exploració en el nombre de neurones, el realitzem sobre el decay.
+
+```{r}
+(decays <- 10^seq(-2, 0, by=0.2))
+```
+
+Les neurones han estat fixades a 20.
+
+```{r}
+model2.10x10CV <- train (C_learn ~., data = Learn_scaled, method='nnet', 
+                        maxit = 500, trace = FALSE,
+                        tuneGrid = expand.grid(.size=20,.decay=decays), trControl=trc)
+```
+
+Podem observar els resultats obtinguts
+
+```{r}
+model2.10x10CV$results
+```
+
+I visualitzem els resultats gràficament:
+
+```{r}
+ggplot(aes(x = model2.10x10CV$results$decay , y = model2.10x10CV$results$Accuracy),data = model2.10x10CV) +  
+  geom_point(shape = 21,fill = "#FF9999",size = 3) + geom_line() + labs(x = "Decay")
+```
+
+I obtenim la millor configuració de model.
+
+```{r}
+model2.10x10CV$bestTune
+```
+
+Comparem els dos models i seleccionem el que disposa d'un major *accuracy*:
+
+```{r}
+(val_err_NNET = 1-model2.10x10CV$results[11,]$Accuracy)
+1-model.10x10CV$results[1,]$Accuracy
+```
+
+Sent en aquest cas 20 neurones i decay 1.
+
+RANDOM FOREST
+
+```{r}
+(ntrees <- round(2^seq(1,10)))
+```
+
+```{r}
+rf.results <- matrix (rep(0,2*length(ntrees)), nrow=length(ntrees))
+colnames (rf.results) <- c("ntrees", "OOB")
+rf.results[,"ntrees"] <- ntrees
+rf.results[,"OOB"] <- 0
+```
+
+Podem observar els resultats gràficament.
+
+```{r}
+ggplot(aes(x = rf.results[,"ntrees"] , y = rf.results[,"OOB"]),data = as.data.frame(rf.results[,"OOB"])) +  
+  geom_point(shape = 21,fill = "#FF9999",size = 3) + geom_line() + labs(x = "Size",y ="OOB")
+```
+
+
+```{r}
+data=cbind(X_Learn,C_learn)
+rand <- sample(N, round(N*0.5))
+```
+
+```{r}
+ii <- 1
+
+for (nt in ntrees)
+{ 
+  # build forest
+  model.rf <- randomForest(C_learn ~ ., data=data, ntree=nt, proximity=FALSE,na.action=na.exclude)
+  
+  # get the OOB and store it appropriately
+  rf.results[ii, "OOB"] <- model.rf$err.rate[nt,1]  
+  ii <- ii+1
+}
+```
+
+```{r}
+lowest.OOB.error <- as.integer(which.min(rf.results[,"OOB"]))
+(ntrees.best <- rf.results[lowest.OOB.error,"ntrees"])
+```
+
+```{r warning=FALSE}
+calculate_validation_error_v2 <- function(method){
+  # METHOD: 1-GLM 2-NB 3-KNN 4-LDA 5-QDA
+  
+  if(method == 1){error_validation = rep(0,3)}
+  else {error_validation = 0}
+  N <- nrow(Learn)
+  for (i in 1:10) {
+   v <- sample(N)
+   #Realitzem una barreja aleatoria, amb l'objetiu de fer una 10 x 10 k fold
+   for (j in 1:10) {
+     #Comencem a realitzar k-fold.
+      begin <- round((j-1)*N/10+1)
+      end <- round(j*N/10)
+      
+      X_Learning = X_Learn[v[-(begin:end)],]
+      C_Learning = C_learn[v[-(begin:end)]]
+      X_validation = X_Learn[v[begin:end],]
+      C_validation = C_learn[v[begin:end]]
+      
+      if(method != 2 & method != 3 & method != 6){
+        for (i in 1:9){
+        X_Learning[,i] = as.numeric(X_Learning[,i])
+        X_validation[,i] = as.numeric(X_validation[,i])
+        }
+      }
+      
+      if(method ==1 | method == 2){
+        #Transformem a data frame per aplicar el metode escollit.
+        X_Learning = as.data.frame(X_Learning)
+        X_validation = as.data.frame(X_validation)
+      }
+      
+      if(method == 2){
+        #Generem el nostre classificador Naive Bayes.
+        md_NB  = naive_bayes(C_Learning ~ ., data=X_Learning, laplace=1)
+        #Calculem les predicions per als valors de validació i computem el seu error.
+        pred = predict( md_NB, newdata = X_validation)
+        pred = factor(pred, levels =c("Benign", "Malignant"))
+      }
+      
+      else if(method == 3){
+        pred <- knn (X_Learning,X_validation, C_Learning, k = 10, use.all = TRUE) 
+      }
+      
+      else if (method == 4){
+         lda <- lda(C_Learning~., data=X_Learning)
+         pred = predict(lda, newdata =X_validation, type = "response")
+         pred = pred$class
+      }
+      
+      else if(method == 5){
+        qda <- qda(x=X_Learning, grouping=C_Learning)
+        pred = predict(qda, newdata =X_validation, type = "response")
+        pred = pred$class
+      }
+      
+      else if(method == 6){
+        rf = randomForest(C_Learning ~ ., data=X_Learning, ntree=ntrees.best, proximity=FALSE)
+        pred <- predict (rf, X_validation, type="class")
+      }
+      
+      if(method == 1){error_validation = error_validation + calculate_validation_error(X_Learning,C_Learning,X_validation,C_validation)}
+      else{
+        tab = table(Truth=C_validation, Pred=pred)
+        error_validation <- error_validation + 1 - sum(diag(tab))/sum(tab)
+      }
+   }
+}
+#Calcul de la mitjana dels errors de validació. Es divideix entre 100 perquè hem aplicat un 10 x 10 fold.
+error_validation = error_validation/100
+cat("Error de validació: ", error_validation)
+}
+```
+
+Calculem ara tots els errors de validació per a cadascun dels mètodes proposats:
+
+```{r, warning = F}
+nom_models = c("GLM's","NB","KNN","LDA","QDA","RF")
+for (i in 1:6){
+cat(nom_models[i],"\n")
+calculate_validation_error_v2(i)
+cat("\n--------\n")
+}
+cat("NNET \n")
+cat("Error de validació: ",val_err_NNET)
+cat("\n--------\n")
+```
+
+Seleccio del mètode NB ja que es en que ens proporciona l'error de validació més petit.
+
+Procedim a calcular el seu error de test.
+
+```{r}
+#Transformema data frame per tal de que la funció pugui aplicar el model de manera correcta.
+X_Learn = as.data.frame(X_Learn)
+X_Test = as.data.frame(X_Test)
+#Generem el nostre classificador Naive Bayes.
+m_NB  = naive_bayes(C_learn ~ ., data=X_Learn, laplace=1)
+#Calculem les predicions per als valors de validació i computem el seu error.
+pred_test = predict( m_NB, newdata = X_Test)
+pred_test = factor(pred_test, levels =c("Benign", "Malignant"))
+tab_test = table(Truth=C_test, Pred=pred_test)
+error_test <- 1 - sum(diag(tab_test))/sum(tab_test)
+error_test
+```
+
