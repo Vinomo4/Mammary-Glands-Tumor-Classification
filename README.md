@@ -19,7 +19,7 @@ To solve the classification problem, several algorithms have been used:
 * GLM'S
 * Naive Bayes
 * K-NN
-* k-nn LOOCV
+* K-NN LOOCV
 * LDA
 * QDA
 * Neuronal Network
