@@ -47,7 +47,7 @@ To install the requested libraries, the following command should be executed in 
 
 ## Architecture
 
-The files contained on this repository are:
+The files contained in this repository are:
 
 * [`R Code`](./Code.Rmd) with all the machine learning techniques.
 * An extensive [`report`](./Report.pdf) about the development and conclusions of this project. (Language: Catalan)
